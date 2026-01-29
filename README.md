@@ -67,7 +67,7 @@ Reference `decisions.md` and `task.md` for project context.
 1. Modify `dist/index.html`
 2. Upload to S3:
    ```bash
-   aws s3 cp dist/index.html s3://jurigregg-metronome/index.html \
+   aws s3 cp dist/index.html s3://<BUCKET_NAME>/index.html \
        --content-type "text/html; charset=utf-8" \
        --cache-control "max-age=3600"
    ```
