@@ -12,14 +12,17 @@ This file tracks all confirmed decisions. Both Claude.ai and Claude Code should 
 - **Contents**: Single `index.html` file
 
 ### CloudFront
-- **Approach**: Add to EXISTING distribution
-- **Existing distribution**: jurigregg.com CloudFront distribution
-- **New origin**: Point to `jurigregg-metronome` S3 bucket
-- **New behavior**: Path pattern `/metronome*` routes to new origin
-- **Function**: CloudFront function to rewrite `/metronome` → `/index.html`
+- **Approach**: NEW dedicated distribution for subdomain
+- **Domain**: metronome.jurigregg.com
+- **Origin**: `jurigregg-metronome` S3 bucket
+- **Default root object**: index.html
+
+### DNS (Route 53)
+- Add CNAME or A record (alias) for metronome.jurigregg.com
+- Point to new CloudFront distribution
 
 ### SSL
-- Using existing ACM certificate (covers jurigregg.com and *.jurigregg.com)
+- Using existing ACM certificate (covers *.jurigregg.com wildcard)
 - No new certificate needed
 
 ---

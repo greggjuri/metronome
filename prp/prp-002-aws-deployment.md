@@ -1,54 +1,59 @@
-# PRP-002: AWS Deployment for Metronome
+# PRP-002: AWS Deployment for Metronome (Subdomain)
 
 ## Context
 
 - **Init file**: `init/init-002-aws-deployment.md`
-- **Decisions**: `decisions.md` - Use existing CloudFront distribution, dedicated S3 bucket
-- **Technical notes**: `task.md` - CloudFront function code for path routing
+- **Decisions**: `decisions.md` - New dedicated CloudFront distribution, subdomain approach
+- **Technical notes**: `task.md` - AWS commands and configuration details
 
 ### Key Constraints
-- Deploy to EXISTING CloudFront distribution for jurigregg.com
-- Create NEW S3 bucket for metronome content
+- Create NEW dedicated CloudFront distribution (not modify existing)
+- Use subdomain: `metronome.jurigregg.com`
+- Use existing wildcard ACM certificate (`*.jurigregg.com`)
+- Create Route 53 DNS record pointing to CloudFront
 - Use Origin Access Control (OAC) for secure S3 access
-- CloudFront function handles `/metronome` → `/index.html` rewriting
-- Use existing ACM certificate (no new SSL setup needed)
-- Final URL: https://jurigregg.com/metronome
+- No CloudFront function needed (simpler architecture)
 
 ### Prerequisites
 - AWS CLI configured with appropriate credentials
 - `dist/index.html` exists (created by PRP-001)
-- Existing CloudFront distribution serving jurigregg.com
+- Existing ACM wildcard certificate for `*.jurigregg.com` in us-east-1
+- Existing Route 53 hosted zone for `jurigregg.com`
 
 ## Objective
 
-Deploy the metronome application to AWS infrastructure so it is accessible at:
-- https://jurigregg.com/metronome
-- https://jurigregg.com/metronome/
-
-Both URLs should serve the same `index.html` content.
+Deploy the metronome application to AWS infrastructure accessible at:
+- **https://metronome.jurigregg.com**
 
 ## Technical Approach
 
 ### Architecture Overview
 ```
-User Request: https://jurigregg.com/metronome
+User: https://metronome.jurigregg.com
     ↓
-CloudFront Distribution (existing)
+Route 53: metronome.jurigregg.com → CloudFront
     ↓
-Cache Behavior: /metronome* → S3 Origin
-    ↓
-CloudFront Function: /metronome → /index.html
+CloudFront Distribution (NEW dedicated)
     ↓
 S3 Bucket: jurigregg-metronome/index.html
 ```
 
-### Components to Create/Configure
+### Why Subdomain is Simpler
+- No CloudFront function for path rewriting
+- index.html served as default root object
+- Isolated from other jurigregg.com infrastructure
+- Easier to manage and delete later
+
+### Components to Create
 1. **S3 Bucket**: `jurigregg-metronome` with index.html
-2. **Origin Access Control (OAC)**: Secure access from CloudFront to S3
-3. **S3 Bucket Policy**: Allow OAC to read objects
-4. **CloudFront Function**: Path rewriting for /metronome routes
-5. **CloudFront Origin**: New origin pointing to S3 bucket
-6. **CloudFront Cache Behavior**: Route /metronome* to new origin
+2. **Origin Access Control (OAC)**: Secure CloudFront → S3 access
+3. **CloudFront Distribution**: New dedicated distribution with SSL
+4. **S3 Bucket Policy**: Allow OAC to read objects
+5. **Route 53 A Record**: Alias to CloudFront distribution
+
+### Existing Resources to Use
+- **ACM Certificate**: `*.jurigregg.com` wildcard cert in us-east-1
+- **Route 53 Hosted Zone**: `jurigregg.com`
 
 ## Implementation Steps
 
@@ -66,16 +71,14 @@ aws sts get-caller-identity
 
 ### Step 2: Create S3 Bucket
 
-Create the bucket in us-east-1 (required for CloudFront integration):
+Create the bucket in us-east-1 (required for CloudFront):
 ```bash
 aws s3 mb s3://jurigregg-metronome --region us-east-1
 ```
 
-**If bucket name is taken**, try alternatives:
-- `jurigregg-metronome-app`
-- `jg-metronome`
+**If bucket name is taken**, try alternatives like `jurigregg-metronome-app`.
 
-Block all public access (CloudFront OAC will handle access):
+Block all public access (OAC will handle access):
 ```bash
 aws s3api put-public-access-block \
     --bucket jurigregg-metronome \
@@ -96,22 +99,8 @@ Verify upload:
 aws s3 ls s3://jurigregg-metronome/
 ```
 
-### Step 4: Get Existing CloudFront Distribution ID
+### Step 4: Create Origin Access Control (OAC)
 
-Find the distribution serving jurigregg.com:
-```bash
-aws cloudfront list-distributions \
-    --query "DistributionList.Items[?Aliases.Items[?contains(@, 'jurigregg.com')]].[Id,DomainName,Aliases.Items[0]]" \
-    --output table
-```
-
-Store the distribution ID for subsequent steps (e.g., `E1234567890ABC`).
-
-If no distribution is found, ask the user to provide the distribution ID.
-
-### Step 5: Create Origin Access Control (OAC)
-
-Create OAC for S3 access:
 ```bash
 aws cloudfront create-origin-access-control \
     --origin-access-control-config '{
@@ -123,17 +112,91 @@ aws cloudfront create-origin-access-control \
     }'
 ```
 
-Save the returned OAC ID (e.g., `E2QWRUHAPOMQZL`).
+**Save the returned OAC ID** (e.g., `E2QWRUHAPOMQZL`) for Step 6.
 
-### Step 6: Create S3 Bucket Policy
+### Step 5: Find ACM Certificate ARN
 
-Get the CloudFront distribution ARN:
+Find the wildcard certificate for `*.jurigregg.com`:
 ```bash
-aws cloudfront get-distribution --id <DISTRIBUTION_ID> \
-    --query "Distribution.ARN" --output text
+aws acm list-certificates --region us-east-1 \
+    --query "CertificateSummaryList[?contains(DomainName, 'jurigregg.com')].{Domain:DomainName,ARN:CertificateArn}" \
+    --output table
 ```
 
+**Save the certificate ARN** for Step 6.
+
+### Step 6: Create CloudFront Distribution
+
+Create a distribution config file (`/tmp/cf-distribution.json`):
+
+```json
+{
+    "CallerReference": "metronome-dist-001",
+    "Comment": "Metronome application distribution",
+    "Enabled": true,
+    "DefaultRootObject": "index.html",
+    "Origins": {
+        "Quantity": 1,
+        "Items": [
+            {
+                "Id": "metronome-s3-origin",
+                "DomainName": "jurigregg-metronome.s3.us-east-1.amazonaws.com",
+                "S3OriginConfig": {
+                    "OriginAccessIdentity": ""
+                },
+                "OriginAccessControlId": "<OAC_ID>"
+            }
+        ]
+    },
+    "DefaultCacheBehavior": {
+        "TargetOriginId": "metronome-s3-origin",
+        "ViewerProtocolPolicy": "redirect-to-https",
+        "AllowedMethods": {
+            "Quantity": 2,
+            "Items": ["GET", "HEAD"],
+            "CachedMethods": {
+                "Quantity": 2,
+                "Items": ["GET", "HEAD"]
+            }
+        },
+        "CachePolicyId": "658327ea-f89d-4fab-a63d-7e88639e58f6",
+        "Compress": true
+    },
+    "Aliases": {
+        "Quantity": 1,
+        "Items": ["metronome.jurigregg.com"]
+    },
+    "ViewerCertificate": {
+        "ACMCertificateArn": "<CERTIFICATE_ARN>",
+        "SSLSupportMethod": "sni-only",
+        "MinimumProtocolVersion": "TLSv1.2_2021"
+    },
+    "PriceClass": "PriceClass_100",
+    "HttpVersion": "http2"
+}
+```
+
+**Replace placeholders**:
+- `<OAC_ID>`: OAC ID from Step 4
+- `<CERTIFICATE_ARN>`: Certificate ARN from Step 5
+
+**Note**: `658327ea-f89d-4fab-a63d-7e88639e58f6` is the AWS managed "CachingOptimized" policy ID.
+
+Create the distribution:
+```bash
+aws cloudfront create-distribution \
+    --distribution-config file:///tmp/cf-distribution.json
+```
+
+**Save from the output**:
+- **Distribution ID** (e.g., `E1234567890ABC`)
+- **Distribution ARN** (e.g., `arn:aws:cloudfront::123456789012:distribution/E1234567890ABC`)
+- **Distribution Domain Name** (e.g., `d1234567890.cloudfront.net`)
+
+### Step 7: Update S3 Bucket Policy
+
 Create bucket policy file (`/tmp/bucket-policy.json`):
+
 ```json
 {
     "Version": "2012-10-17",
@@ -156,6 +219,8 @@ Create bucket policy file (`/tmp/bucket-policy.json`):
 }
 ```
 
+**Replace** `<DISTRIBUTION_ARN>` with the ARN from Step 6.
+
 Apply the policy:
 ```bash
 aws s3api put-bucket-policy \
@@ -163,155 +228,94 @@ aws s3api put-bucket-policy \
     --policy file:///tmp/bucket-policy.json
 ```
 
-### Step 7: Create CloudFront Function
+### Step 8: Get Route 53 Hosted Zone ID
 
-Create function code file (`/tmp/metronome-router.js`):
-```javascript
-function handler(event) {
-    var request = event.request;
-    var uri = request.uri;
-
-    if (uri === '/metronome' || uri === '/metronome/') {
-        request.uri = '/index.html';
-    } else if (uri.startsWith('/metronome/')) {
-        request.uri = uri.replace('/metronome', '');
-    }
-
-    return request;
-}
-```
-
-Create the function:
 ```bash
-aws cloudfront create-function \
-    --name metronome-router \
-    --function-config '{
-        "Comment": "Route /metronome paths to index.html",
-        "Runtime": "cloudfront-js-2.0"
-    }' \
-    --function-code fileb:///tmp/metronome-router.js
+aws route53 list-hosted-zones \
+    --query "HostedZones[?Name=='jurigregg.com.'].Id" \
+    --output text
 ```
 
-Publish the function (required before use):
-```bash
-aws cloudfront publish-function \
-    --name metronome-router \
-    --if-match <ETAG_FROM_CREATE>
-```
+This returns something like `/hostedzone/Z1234567890ABC`. **Save the ID portion** (e.g., `Z1234567890ABC`).
 
-Get the function ARN for the cache behavior.
+### Step 9: Create Route 53 DNS Record
 
-### Step 8: Update CloudFront Distribution
+Create the change batch file (`/tmp/dns-record.json`):
 
-This is the most complex step. It requires:
-1. Get current distribution config
-2. Add new origin
-3. Add new cache behavior
-4. Update the distribution
-
-**Get current config:**
-```bash
-aws cloudfront get-distribution-config --id <DISTRIBUTION_ID> > /tmp/dist-config.json
-```
-
-**Extract and modify the config:**
-
-The config needs these additions:
-
-**New Origin** (add to `Origins.Items` array):
 ```json
 {
-    "Id": "metronome-s3",
-    "DomainName": "jurigregg-metronome.s3.us-east-1.amazonaws.com",
-    "S3OriginConfig": {
-        "OriginAccessIdentity": ""
-    },
-    "OriginAccessControlId": "<OAC_ID>",
-    "ConnectionAttempts": 3,
-    "ConnectionTimeout": 10,
-    "OriginShield": {
-        "Enabled": false
-    }
-}
-```
-
-**New Cache Behavior** (add to `CacheBehaviors.Items` array, BEFORE default):
-```json
-{
-    "PathPattern": "/metronome*",
-    "TargetOriginId": "metronome-s3",
-    "ViewerProtocolPolicy": "redirect-to-https",
-    "AllowedMethods": {
-        "Quantity": 2,
-        "Items": ["GET", "HEAD"],
-        "CachedMethods": {
-            "Quantity": 2,
-            "Items": ["GET", "HEAD"]
-        }
-    },
-    "CachePolicyId": "658327ea-f89d-4fab-a63d-7e88639e58f6",
-    "Compress": true,
-    "FunctionAssociations": {
-        "Quantity": 1,
-        "Items": [
-            {
-                "FunctionARN": "<FUNCTION_ARN>",
-                "EventType": "viewer-request"
+    "Changes": [
+        {
+            "Action": "CREATE",
+            "ResourceRecordSet": {
+                "Name": "metronome.jurigregg.com",
+                "Type": "A",
+                "AliasTarget": {
+                    "HostedZoneId": "Z2FDTNDATAQYW2",
+                    "DNSName": "<CLOUDFRONT_DOMAIN>",
+                    "EvaluateTargetHealth": false
+                }
             }
-        ]
-    }
+        }
+    ]
 }
 ```
 
-Note: `658327ea-f89d-4fab-a63d-7e88639e58f6` is the AWS managed "CachingOptimized" policy ID.
+**Replace** `<CLOUDFRONT_DOMAIN>` with the CloudFront domain from Step 6 (e.g., `d1234567890.cloudfront.net`).
 
-**Update the distribution:**
+**Note**: `Z2FDTNDATAQYW2` is the fixed hosted zone ID for all CloudFront distributions.
+
+Apply the DNS change:
 ```bash
-aws cloudfront update-distribution \
-    --id <DISTRIBUTION_ID> \
-    --if-match <ETAG> \
-    --distribution-config file:///tmp/updated-dist-config.json
+aws route53 change-resource-record-sets \
+    --hosted-zone-id <HOSTED_ZONE_ID> \
+    --change-batch file:///tmp/dns-record.json
 ```
 
-### Step 9: Wait for Deployment
+### Step 10: Wait for Distribution Deployment
 
-CloudFront distributions take time to deploy changes:
+CloudFront distributions take 5-15 minutes to deploy:
 ```bash
 aws cloudfront wait distribution-deployed --id <DISTRIBUTION_ID>
 ```
 
-This can take 5-15 minutes.
-
-### Step 10: Invalidate Cache
-
-Clear any cached content:
+Or check status manually:
 ```bash
-aws cloudfront create-invalidation \
-    --distribution-id <DISTRIBUTION_ID> \
-    --paths "/metronome" "/metronome/" "/metronome/*"
+aws cloudfront get-distribution --id <DISTRIBUTION_ID> \
+    --query "Distribution.Status" --output text
 ```
+
+Wait until status is `Deployed`.
 
 ### Step 11: Verify Deployment
 
-Test the URLs:
+Test the URL:
 ```bash
-curl -I https://jurigregg.com/metronome
-curl -I https://jurigregg.com/metronome/
+curl -I https://metronome.jurigregg.com
 ```
 
-Both should return HTTP 200 with `Content-Type: text/html`.
+Expected response:
+- HTTP 200 (or 301/302 redirecting to HTTPS)
+- `Content-Type: text/html`
+- No SSL errors
+
+Test in browser:
+- Open https://metronome.jurigregg.com
+- Verify metronome UI loads
+- Verify no certificate warnings
+- Test start/stop and theme toggle
 
 ## Validation Gates
 
 - [ ] **Gate 1: S3 Bucket Exists** - `aws s3 ls s3://jurigregg-metronome/` shows index.html
-- [ ] **Gate 2: OAC Created** - Origin Access Control exists for metronome
-- [ ] **Gate 3: Bucket Policy Applied** - Policy allows CloudFront access
-- [ ] **Gate 4: CloudFront Function Published** - Function is in LIVE stage
-- [ ] **Gate 5: Distribution Updated** - New origin and behavior exist in config
-- [ ] **Gate 6: Distribution Deployed** - Status is "Deployed" not "InProgress"
-- [ ] **Gate 7: URL Returns 200** - `curl -I https://jurigregg.com/metronome` returns HTTP 200
-- [ ] **Gate 8: Content Correct** - `curl https://jurigregg.com/metronome` returns metronome HTML
-- [ ] **Gate 9: Trailing Slash Works** - `https://jurigregg.com/metronome/` also works
+- [ ] **Gate 2: OAC Created** - `aws cloudfront list-origin-access-controls` shows metronome-s3-oac
+- [ ] **Gate 3: Distribution Created** - `aws cloudfront list-distributions` shows new distribution
+- [ ] **Gate 4: Bucket Policy Applied** - Policy allows CloudFront OAC access
+- [ ] **Gate 5: DNS Record Exists** - `dig metronome.jurigregg.com` resolves to CloudFront
+- [ ] **Gate 6: Distribution Deployed** - Status is "Deployed"
+- [ ] **Gate 7: HTTPS Works** - `curl -I https://metronome.jurigregg.com` returns 200
+- [ ] **Gate 8: Content Correct** - Browser loads metronome app correctly
+- [ ] **Gate 9: SSL Valid** - No certificate warnings in browser
 
 ## Error Handling
 
@@ -319,49 +323,64 @@ Both should return HTTP 200 with `Content-Type: text/html`.
 
 1. **Bucket name already exists**
    - S3 bucket names are globally unique
-   - Try alternative names: `jurigregg-metronome-app`, `jg-metronome-prod`
-   - Update all subsequent commands with the actual bucket name
+   - Try alternatives: `jurigregg-metronome-app`, `jg-metronome`
+   - Update all subsequent commands with actual bucket name
 
-2. **Access Denied on S3**
+2. **Certificate not found**
+   - ACM certificates must be in us-east-1 for CloudFront
+   - Verify wildcard cert exists: `aws acm list-certificates --region us-east-1`
+   - If no wildcard, need to request one or use different domain
+
+3. **Access Denied on S3**
    - Verify bucket policy has correct distribution ARN
-   - Ensure OAC ID is correctly set in the origin config
-   - Check that public access block is configured correctly
+   - Ensure OAC ID is correctly set in distribution config
+   - Check that public access block is configured
 
-3. **CloudFront function syntax error**
-   - Validate JavaScript syntax before creating
-   - CloudFront JS runtime is not full Node.js - limited APIs
-   - Test function in AWS Console if CLI fails
+4. **Distribution creation fails**
+   - Check that certificate ARN is valid
+   - Verify OAC ID exists
+   - Ensure CNAME (metronome.jurigregg.com) isn't used by another distribution
 
-4. **Distribution update fails with "PreconditionFailed"**
-   - ETag has changed - re-fetch the config and try again
-   - Someone else may have modified the distribution
+5. **DNS not resolving**
+   - DNS propagation takes up to 48 hours (usually minutes)
+   - Verify hosted zone ID is correct
+   - Check CloudFront domain name in alias target is correct
 
-5. **403 Forbidden after deployment**
-   - Check S3 bucket policy matches distribution ARN exactly
-   - Verify OAC is attached to origin
-   - Clear browser cache and retry
-
-6. **CloudFront function not triggering**
-   - Verify function is published (not just created)
-   - Check function association in cache behavior
-   - Ensure path pattern matches (`/metronome*` not `/metronome/*`)
-
-7. **DNS/SSL issues**
-   - These should not occur since we're using existing distribution
-   - If they do, the existing jurigregg.com setup has issues
+6. **SSL certificate error in browser**
+   - Verify certificate covers `*.jurigregg.com` or `metronome.jurigregg.com`
+   - Check certificate is in "Issued" status
+   - Ensure SSLSupportMethod is "sni-only"
 
 ### Rollback Procedure
 
 If deployment fails and needs rollback:
 
-1. Remove cache behavior from CloudFront distribution
-2. Remove origin from CloudFront distribution
-3. Delete CloudFront function
-4. Delete S3 bucket:
+1. Delete Route 53 record:
+   ```bash
+   # Change "Action": "CREATE" to "DELETE" in dns-record.json
+   aws route53 change-resource-record-sets \
+       --hosted-zone-id <HOSTED_ZONE_ID> \
+       --change-batch file:///tmp/dns-record.json
+   ```
+
+2. Delete CloudFront distribution (must disable first):
+   ```bash
+   # Get current config
+   aws cloudfront get-distribution-config --id <DIST_ID> > /tmp/dist.json
+   # Set Enabled: false, then update
+   aws cloudfront update-distribution --id <DIST_ID> --if-match <ETAG> --distribution-config file:///tmp/disabled.json
+   # Wait for deployment
+   aws cloudfront wait distribution-deployed --id <DIST_ID>
+   # Delete
+   aws cloudfront delete-distribution --id <DIST_ID> --if-match <NEW_ETAG>
+   ```
+
+3. Delete S3 bucket:
    ```bash
    aws s3 rb s3://jurigregg-metronome --force
    ```
-5. Delete OAC:
+
+4. Delete OAC:
    ```bash
    aws cloudfront delete-origin-access-control --id <OAC_ID> --if-match <ETAG>
    ```
@@ -369,9 +388,10 @@ If deployment fails and needs rollback:
 ## Output
 
 This PRP produces:
-- S3 bucket with `index.html` uploaded
-- CloudFront configuration updates (origin, behavior, function)
-- Working URL: https://jurigregg.com/metronome
+- S3 bucket `jurigregg-metronome` with `index.html`
+- CloudFront distribution serving `metronome.jurigregg.com`
+- Route 53 DNS record pointing to CloudFront
+- Working URL: **https://metronome.jurigregg.com**
 
 No files are created in the repository - all changes are AWS infrastructure.
 
@@ -379,36 +399,34 @@ No files are created in the repository - all changes are AWS infrastructure.
 
 The deployment is complete when:
 
-1. S3 bucket `jurigregg-metronome` (or variant) contains `index.html`
-2. CloudFront function `metronome-router` is published and live
-3. CloudFront distribution has new origin and cache behavior
-4. Distribution status is "Deployed"
-5. https://jurigregg.com/metronome returns the metronome app
-6. https://jurigregg.com/metronome/ also returns the metronome app
-7. No SSL/certificate warnings in browser
-8. Cache-Control header is present (max-age=3600)
+1. S3 bucket `jurigregg-metronome` contains `index.html`
+2. CloudFront distribution is created and status is "Deployed"
+3. Route 53 A record exists for `metronome.jurigregg.com`
+4. **https://metronome.jurigregg.com** loads the metronome app
+5. No SSL/certificate warnings in browser
+6. Cache-Control header is present (max-age=3600)
+7. Theme toggle and audio playback work correctly
 
 ---
 
-## Confidence Score: 6/10
+## Confidence Score: 8/10
 
 **Areas of high confidence:**
 - S3 bucket creation and file upload (straightforward CLI commands)
-- CloudFront function creation (exact code provided in task.md)
-- OAC creation (documented AWS procedure)
+- OAC creation (simple, well-documented)
+- Route 53 DNS record (standard alias pattern)
+- Overall architecture is simpler than path-based approach
 
-**Areas of uncertainty:**
+**Areas of minor uncertainty:**
 
-1. **Existing distribution configuration (-2 points)**: We don't know the exact structure of the existing CloudFront distribution. The update-distribution command requires merging new config with existing config, which may have unexpected fields or structures.
+1. **CloudFront distribution config (-1 point)**: The JSON config for creating a distribution is complex. Minor typos or missing fields will cause failures. However, the config provided is complete and tested patterns.
 
-2. **Distribution ID retrieval (-1 point)**: The query to find the distribution may not work if aliases are configured differently than expected. May need user input.
+2. **Certificate ARN lookup (-1 point)**: Depends on existing wildcard certificate. If it doesn't exist or has a different domain pattern, will need adjustment.
 
-3. **Interactive nature of deployment (-1 point)**: Multiple steps depend on outputs from previous steps (OAC ID, function ARN, ETag values). This requires careful handling of intermediate values and may need user intervention if something fails.
+**Improvements over previous PRP:**
+- No CloudFront function complexity
+- No need to modify existing distribution
+- Cleaner, more isolated architecture
+- Fewer steps with interdependencies
 
-**Recommendations for execution:**
-- Execute steps incrementally with verification after each
-- Be prepared to ask user for distribution ID if auto-detection fails
-- Save all intermediate IDs and ARNs for use in subsequent steps
-- If distribution update is complex, consider using AWS Console for that step and documenting what was done
-
-**This PRP is best executed interactively** rather than as a fully automated script, given the dependencies between steps and potential for environment-specific variations.
+**This PRP can be executed with high confidence** given that the wildcard certificate exists and AWS CLI is properly configured.

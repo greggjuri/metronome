@@ -86,28 +86,63 @@ document.addEventListener('click', () => {
 
 ---
 
-## AWS Deployment Notes
+## AWS Deployment Notes (Subdomain Approach)
 
-### CloudFront Function for Path Routing
-```javascript
-function handler(event) {
-    var request = event.request;
-    var uri = request.uri;
-    
-    if (uri === '/metronome' || uri === '/metronome/') {
-        request.uri = '/index.html';
-    } else if (uri.startsWith('/metronome/')) {
-        request.uri = uri.replace('/metronome', '');
-    }
-    
-    return request;
-}
+### Simpler Architecture
+With `metronome.jurigregg.com` subdomain:
+- No CloudFront function needed
+- No path rewriting required
+- index.html served as default root object
+- Cleaner URL
+
+### S3 Bucket Setup
+```bash
+# Create bucket
+aws s3 mb s3://jurigregg-metronome --region us-east-1
+
+# Block public access (OAC will handle)
+aws s3api put-public-access-block \
+    --bucket jurigregg-metronome \
+    --public-access-block-configuration \
+    "BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true"
+
+# Upload file
+aws s3 cp dist/index.html s3://jurigregg-metronome/index.html \
+    --content-type "text/html; charset=utf-8" \
+    --cache-control "max-age=3600"
+```
+
+### CloudFront Distribution Config
+Key settings for new distribution:
+- **Origin**: jurigregg-metronome.s3.us-east-1.amazonaws.com
+- **Origin Access Control**: Create new OAC for S3
+- **Default Root Object**: index.html
+- **Alternate Domain Name (CNAME)**: metronome.jurigregg.com
+- **SSL Certificate**: Select existing *.jurigregg.com cert from ACM
+- **Viewer Protocol Policy**: Redirect HTTP to HTTPS
+- **Price Class**: Use only North America and Europe (or all edge locations)
+
+### Find Existing Wildcard Certificate ARN
+```bash
+aws acm list-certificates --region us-east-1 \
+    --query "CertificateSummaryList[?contains(DomainName, '*.jurigregg.com') || contains(DomainName, 'jurigregg.com')].CertificateArn" \
+    --output text
+```
+
+### Route 53 DNS Record
+After CloudFront distribution is created:
+```bash
+# Get hosted zone ID for jurigregg.com
+aws route53 list-hosted-zones --query "HostedZones[?Name=='jurigregg.com.'].Id" --output text
+
+# Create A record (alias) pointing to CloudFront
+# CloudFront hosted zone ID is always: Z2FDTNDATAQYW2
 ```
 
 ### Cache Invalidation
-After deployment:
+After updates:
 ```bash
 aws cloudfront create-invalidation \
-    --distribution-id [DISTRIBUTION_ID] \
-    --paths "/metronome/*"
+    --distribution-id <NEW_DISTRIBUTION_ID> \
+    --paths "/*"
 ```

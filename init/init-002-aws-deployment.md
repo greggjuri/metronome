@@ -1,88 +1,93 @@
-# init-002: Deploy Metronome to AWS
+# init-002: Deploy Metronome to AWS (Subdomain)
 
-> **See also:** `decisions.md` for confirmed architecture, `task.md` for CloudFront function code.
+> **See also:** `decisions.md` for architecture, `task.md` for AWS commands.
 
 ## OBJECTIVE
-Deploy `dist/index.html` to AWS so it's accessible at https://jurigregg.com/metronome
+Deploy `dist/index.html` to AWS at **https://metronome.jurigregg.com**
 
-## DEPLOYMENT ARCHITECTURE (from decisions.md)
+## DEPLOYMENT ARCHITECTURE
 
-### S3
-- Create dedicated bucket: `jurigregg-metronome`
-- Enable static website hosting
-- Upload `dist/index.html` as `index.html`
-- Set content-type: `text/html`
-- Set cache-control: `max-age=3600`
+### Overview
+```
+User: https://metronome.jurigregg.com
+    ↓
+Route 53: metronome.jurigregg.com → CloudFront
+    ↓
+CloudFront Distribution (NEW, dedicated)
+    ↓
+S3 Bucket: jurigregg-metronome/index.html
+```
 
-### CloudFront
-- Add NEW origin to EXISTING jurigregg.com distribution
-- Origin domain: `jurigregg-metronome.s3.amazonaws.com` (or S3 website endpoint)
-- Create Origin Access Control (OAC) for secure S3 access
-- Add cache behavior for path pattern `/metronome*`
-- Viewer protocol: Redirect HTTP to HTTPS
+### Components to Create
+1. **S3 Bucket**: `jurigregg-metronome`
+2. **Origin Access Control (OAC)**: Secure CloudFront → S3 access
+3. **CloudFront Distribution**: New dedicated distribution
+4. **Route 53 Record**: metronome.jurigregg.com → CloudFront
 
-### Path Routing
-CloudFront function to handle:
-- `/metronome` → serves `index.html`
-- `/metronome/` → serves `index.html`
-
-Function code is in `task.md`.
+### Existing Resources to Use
+- **ACM Certificate**: *.jurigregg.com wildcard cert (us-east-1)
+- **Route 53 Hosted Zone**: jurigregg.com
 
 ## IMPLEMENTATION STEPS
 
 ### Step 1: Create S3 Bucket
-```bash
-aws s3 mb s3://jurigregg-metronome --region us-east-1
-```
+- Bucket name: `jurigregg-metronome`
+- Region: us-east-1
+- Block all public access (OAC handles it)
 
-### Step 2: Upload File
-```bash
-aws s3 cp dist/index.html s3://jurigregg-metronome/index.html \
-    --content-type "text/html" \
-    --cache-control "max-age=3600"
-```
+### Step 2: Upload index.html
+- Source: `dist/index.html`
+- Content-Type: text/html; charset=utf-8
+- Cache-Control: max-age=3600
 
-### Step 3: Create Bucket Policy
-Allow CloudFront OAC to read from bucket. Policy needs:
-- Principal: CloudFront service
-- Action: s3:GetObject
-- Resource: arn:aws:s3:::jurigregg-metronome/*
-- Condition: StringEquals for CloudFront distribution ARN
+### Step 3: Create Origin Access Control (OAC)
+- Name: metronome-s3-oac
+- Signing: sigv4, always
+- Type: s3
 
-### Step 4: Get Existing CloudFront Distribution ID
-```bash
-aws cloudfront list-distributions --query "DistributionList.Items[?Aliases.Items[?contains(@, 'jurigregg.com')]].Id" --output text
-```
+### Step 4: Find ACM Certificate ARN
+- Look for *.jurigregg.com or jurigregg.com cert in us-east-1
+- This will be used for CloudFront SSL
 
-### Step 5: Create CloudFront Function
-Create function for path rewriting (code in task.md).
+### Step 5: Create CloudFront Distribution
+- Origin: jurigregg-metronome.s3.us-east-1.amazonaws.com
+- Origin Access: Use OAC from Step 3
+- Default Root Object: index.html
+- Alternate Domain (CNAME): metronome.jurigregg.com
+- SSL Certificate: ACM cert from Step 4
+- Viewer Protocol: Redirect HTTP to HTTPS
+- Cache Policy: CachingOptimized
 
-### Step 6: Update CloudFront Distribution
-Add:
-- New S3 origin with OAC
-- New cache behavior for `/metronome*` path pattern
-- Associate CloudFront function with viewer-request
+### Step 6: Update S3 Bucket Policy
+- Allow CloudFront OAC to read objects
+- Use distribution ARN in condition
 
-### Step 7: Invalidate Cache
-```bash
-aws cloudfront create-invalidation --distribution-id <ID> --paths "/metronome*"
-```
+### Step 7: Create Route 53 DNS Record
+- Record name: metronome.jurigregg.com
+- Type: A (Alias)
+- Alias target: CloudFront distribution domain
+- CloudFront Hosted Zone ID: Z2FDTNDATAQYW2 (always this for CloudFront)
 
-## REQUIRED INFORMATION
-Claude Code will need to retrieve:
-- Existing CloudFront distribution ID for jurigregg.com
-- CloudFront distribution ARN (for bucket policy)
+### Step 8: Wait for Distribution Deployment
+- CloudFront takes 5-15 minutes to deploy
+- Wait for status: Deployed
+
+### Step 9: Verify
+- Test https://metronome.jurigregg.com loads
+- Verify SSL certificate (no warnings)
+- Test functionality
 
 ## SUCCESS CRITERIA
-- [ ] S3 bucket `jurigregg-metronome` exists with index.html
-- [ ] CloudFront distribution has new origin pointing to bucket
-- [ ] Cache behavior routes `/metronome*` to new origin
-- [ ] CloudFront function handles path rewriting
-- [ ] https://jurigregg.com/metronome loads the metronome app
-- [ ] https://jurigregg.com/metronome/ also works
-- [ ] No certificate warnings (uses existing SSL)
+- [ ] S3 bucket exists with index.html
+- [ ] CloudFront distribution created and deployed
+- [ ] SSL certificate attached (no browser warnings)
+- [ ] DNS record created in Route 53
+- [ ] https://metronome.jurigregg.com loads metronome app
+- [ ] Theme toggle and audio work correctly
 
-## NOTES
-- Bucket name must be globally unique - if `jurigregg-metronome` is taken, use variant
-- CloudFront changes can take 5-15 minutes to propagate
-- User may need to provide distribution ID if auto-detection fails
+## ADVANTAGES OF SUBDOMAIN APPROACH
+- No CloudFront function needed (simpler)
+- No path rewriting complexity
+- Clean URL: metronome.jurigregg.com
+- Isolated from other jurigregg.com infrastructure
+- Easier to manage/delete later
