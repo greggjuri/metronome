@@ -1,0 +1,582 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Metronome</title>
+    <!-- Theme initialization script (prevents flash) -->
+    <script>
+        (function() {
+            const theme = localStorage.getItem('metronome-theme') || 'light';
+            document.documentElement.setAttribute('data-theme', theme);
+        })();
+    </script>
+    <style>
+        /* CSS Custom Properties for Theming */
+        :root {
+            --bg-primary: #ffffff;
+            --bg-secondary: #f5f5f5;
+            --text-primary: #1a1a1a;
+            --text-secondary: #666666;
+            --accent: #2563eb;
+            --accent-hover: #1d4ed8;
+            --beat-inactive: #e5e5e5;
+            --beat-active: #2563eb;
+            --border: #d4d4d4;
+            --shadow: rgba(0, 0, 0, 0.1);
+            --transition-speed: 200ms;
+            --btn-start-bg: #22c55e;
+            --btn-start-hover: #16a34a;
+            --btn-stop-bg: #ef4444;
+            --btn-stop-hover: #dc2626;
+        }
+
+        [data-theme="dark"] {
+            --bg-primary: #1a1a1a;
+            --bg-secondary: #262626;
+            --text-primary: #f5f5f5;
+            --text-secondary: #a3a3a3;
+            --accent: #3b82f6;
+            --accent-hover: #60a5fa;
+            --beat-inactive: #404040;
+            --beat-active: #3b82f6;
+            --border: #404040;
+            --shadow: rgba(0, 0, 0, 0.3);
+            --btn-start-bg: #22c55e;
+            --btn-start-hover: #16a34a;
+            --btn-stop-bg: #ef4444;
+            --btn-stop-hover: #dc2626;
+        }
+
+        /* Reset and Base Styles */
+        *, *::before, *::after {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        html {
+            font-size: 16px;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background-color: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 1rem;
+            transition: background-color var(--transition-speed),
+                        color var(--transition-speed);
+        }
+
+        /* Container */
+        .container {
+            width: 100%;
+            max-width: 400px;
+            background-color: var(--bg-secondary);
+            border-radius: 16px;
+            padding: 1.5rem;
+            box-shadow: 0 4px 12px var(--shadow);
+            transition: background-color var(--transition-speed);
+        }
+
+        /* Header */
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+        }
+
+        h1 {
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        /* Theme Toggle Button */
+        #theme-toggle {
+            width: 44px;
+            height: 44px;
+            border: none;
+            border-radius: 50%;
+            background-color: var(--bg-primary);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.25rem;
+            transition: background-color var(--transition-speed);
+        }
+
+        #theme-toggle:hover {
+            background-color: var(--border);
+        }
+
+        #theme-toggle:focus {
+            outline: 2px solid var(--accent);
+            outline-offset: 2px;
+        }
+
+        /* Theme icon visibility */
+        [data-theme="light"] .icon-dark {
+            display: none;
+        }
+
+        [data-theme="dark"] .icon-light {
+            display: none;
+        }
+
+        /* Main Content */
+        main {
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+
+        /* BPM Display */
+        .bpm-display {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.25rem;
+        }
+
+        #bpm-input {
+            width: 100%;
+            max-width: 200px;
+            font-size: 3.5rem;
+            font-weight: 700;
+            text-align: center;
+            border: 2px solid var(--border);
+            border-radius: 12px;
+            background-color: var(--bg-primary);
+            color: var(--text-primary);
+            padding: 0.5rem;
+            transition: background-color var(--transition-speed),
+                        color var(--transition-speed),
+                        border-color var(--transition-speed);
+        }
+
+        #bpm-input:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        /* Hide spinner arrows */
+        #bpm-input::-webkit-outer-spin-button,
+        #bpm-input::-webkit-inner-spin-button {
+            -webkit-appearance: none;
+            appearance: none;
+            margin: 0;
+        }
+
+        #bpm-input[type=number] {
+            -moz-appearance: textfield;
+            appearance: textfield;
+        }
+
+        .bpm-label {
+            font-size: 1rem;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+        }
+
+        /* Beat Display */
+        .beat-display {
+            display: flex;
+            justify-content: center;
+            gap: 1rem;
+        }
+
+        .beat {
+            width: 56px;
+            height: 56px;
+            border-radius: 50%;
+            background-color: var(--beat-inactive);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: var(--text-secondary);
+            transition: background-color 0.1s ease,
+                        transform 0.1s ease,
+                        color 0.1s ease;
+        }
+
+        .beat.active {
+            background-color: var(--beat-active);
+            color: #ffffff;
+            transform: scale(1.1);
+        }
+
+        /* Start/Stop Button */
+        .start-stop-btn {
+            width: 100%;
+            height: 64px;
+            font-size: 1.25rem;
+            font-weight: 600;
+            border: none;
+            border-radius: 12px;
+            background-color: var(--btn-start-bg);
+            color: #ffffff;
+            cursor: pointer;
+            transition: background-color 0.15s ease,
+                        transform 0.1s ease;
+        }
+
+        .start-stop-btn:hover {
+            background-color: var(--btn-start-hover);
+        }
+
+        .start-stop-btn:active {
+            transform: scale(0.98);
+        }
+
+        .start-stop-btn:focus {
+            outline: 2px solid var(--accent);
+            outline-offset: 2px;
+        }
+
+        .start-stop-btn.playing {
+            background-color: var(--btn-stop-bg);
+        }
+
+        .start-stop-btn.playing:hover {
+            background-color: var(--btn-stop-hover);
+        }
+
+        /* Number Pad */
+        .numpad {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 0.75rem;
+        }
+
+        .numpad button {
+            height: 56px;
+            font-size: 1.25rem;
+            font-weight: 500;
+            border: 2px solid var(--border);
+            border-radius: 12px;
+            background-color: var(--bg-primary);
+            color: var(--text-primary);
+            cursor: pointer;
+            transition: background-color var(--transition-speed),
+                        color var(--transition-speed),
+                        border-color var(--transition-speed);
+        }
+
+        .numpad button:hover {
+            background-color: var(--border);
+        }
+
+        .numpad button:active {
+            transform: scale(0.95);
+        }
+
+        .numpad button:focus {
+            outline: 2px solid var(--accent);
+            outline-offset: 2px;
+        }
+
+        /* Keyboard hint */
+        .hint {
+            text-align: center;
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+            margin-top: 0.5rem;
+        }
+
+        .hint kbd {
+            display: inline-block;
+            padding: 0.125rem 0.375rem;
+            background-color: var(--bg-primary);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            font-family: inherit;
+            font-size: 0.8125rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Metronome</h1>
+            <button id="theme-toggle" aria-label="Toggle dark mode">
+                <span class="icon-light">&#9728;</span>
+                <span class="icon-dark">&#9790;</span>
+            </button>
+        </header>
+
+        <main>
+            <!-- BPM Display -->
+            <div class="bpm-display">
+                <input type="text" id="bpm-input" value="120"
+                       inputmode="numeric" pattern="[0-9]*"
+                       aria-label="Beats per minute" autocomplete="off">
+                <span class="bpm-label">BPM</span>
+            </div>
+
+            <!-- Beat Indicator -->
+            <div class="beat-display" aria-live="polite" aria-label="Beat counter">
+                <div class="beat" data-beat="1">1</div>
+                <div class="beat" data-beat="2">2</div>
+                <div class="beat" data-beat="3">3</div>
+                <div class="beat" data-beat="4">4</div>
+            </div>
+
+            <!-- Start/Stop Button -->
+            <button id="start-stop" class="start-stop-btn" aria-label="Start metronome">
+                Start
+            </button>
+
+            <!-- Number Pad -->
+            <div class="numpad" role="group" aria-label="Number pad">
+                <button data-num="1">1</button>
+                <button data-num="2">2</button>
+                <button data-num="3">3</button>
+                <button data-num="4">4</button>
+                <button data-num="5">5</button>
+                <button data-num="6">6</button>
+                <button data-num="7">7</button>
+                <button data-num="8">8</button>
+                <button data-num="9">9</button>
+                <button data-num="clear" aria-label="Clear">C</button>
+                <button data-num="0">0</button>
+                <button data-num="backspace" aria-label="Backspace">&#9003;</button>
+            </div>
+
+            <p class="hint">Press <kbd>Space</kbd> to start/stop</p>
+        </main>
+    </div>
+
+    <script>
+        // ==========================================
+        // Audio System
+        // ==========================================
+        let audioContext = null;
+        let isPlaying = false;
+        let currentBeat = 0;
+        let nextNoteTime = 0.0;
+        let schedulerTimerId = null;
+
+        // Timing constants
+        const SCHEDULE_AHEAD = 0.1;    // seconds - how far ahead to schedule audio
+        const SCHEDULER_INTERVAL = 25; // ms - how often to call scheduler
+
+        // Initialize AudioContext on first user interaction
+        function initAudio() {
+            if (!audioContext) {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            // Resume if suspended (iOS requirement)
+            if (audioContext.state === 'suspended') {
+                audioContext.resume();
+            }
+        }
+
+        // Play a click at the specified time
+        function playClick(time, isAccent) {
+            const osc = audioContext.createOscillator();
+            const gain = audioContext.createGain();
+
+            osc.connect(gain);
+            gain.connect(audioContext.destination);
+
+            // Higher pitch for beat 1 (accent)
+            osc.frequency.value = isAccent ? 1200 : 1000;
+            osc.type = 'sine';
+
+            // Quick attack, exponential decay
+            gain.gain.setValueAtTime(1, time);
+            gain.gain.exponentialRampToValueAtTime(0.001, time + 0.05);
+
+            osc.start(time);
+            osc.stop(time + 0.05);
+        }
+
+        // Get current BPM with validation
+        function getCurrentBPM() {
+            let bpm = parseInt(bpmInput.value, 10);
+            if (isNaN(bpm) || bpm < 30) bpm = 30;
+            if (bpm > 240) bpm = 240;
+            return bpm;
+        }
+
+        // Schedule upcoming notes
+        function scheduler() {
+            const bpm = getCurrentBPM();
+            const secondsPerBeat = 60.0 / bpm;
+
+            // Schedule all notes that fall within the lookahead window
+            while (nextNoteTime < audioContext.currentTime + SCHEDULE_AHEAD) {
+                // Schedule this beat
+                const isAccent = currentBeat === 0;
+                playClick(nextNoteTime, isAccent);
+
+                // Schedule visual update (use setTimeout for UI, it's okay here)
+                const beatToShow = currentBeat;
+                const timeUntilBeat = (nextNoteTime - audioContext.currentTime) * 1000;
+                setTimeout(() => updateBeatDisplay(beatToShow), Math.max(0, timeUntilBeat));
+
+                // Advance to next beat
+                nextNoteTime += secondsPerBeat;
+                currentBeat = (currentBeat + 1) % 4;
+            }
+        }
+
+        // ==========================================
+        // DOM Elements
+        // ==========================================
+        const bpmInput = document.getElementById('bpm-input');
+        const startStopBtn = document.getElementById('start-stop');
+        const beats = document.querySelectorAll('.beat');
+        const themeToggle = document.getElementById('theme-toggle');
+
+        // ==========================================
+        // Control Logic
+        // ==========================================
+
+        // Start the metronome
+        function start() {
+            initAudio();
+
+            // Validate and clamp BPM
+            let bpm = parseInt(bpmInput.value, 10);
+            if (isNaN(bpm) || bpm === 0) bpm = 120;
+            bpm = Math.max(30, Math.min(240, bpm));
+            bpmInput.value = bpm;
+
+            isPlaying = true;
+            currentBeat = 0;
+            nextNoteTime = audioContext.currentTime;
+
+            schedulerTimerId = setInterval(scheduler, SCHEDULER_INTERVAL);
+
+            startStopBtn.textContent = 'Stop';
+            startStopBtn.setAttribute('aria-label', 'Stop metronome');
+            startStopBtn.classList.add('playing');
+        }
+
+        // Stop the metronome
+        function stop() {
+            isPlaying = false;
+
+            if (schedulerTimerId) {
+                clearInterval(schedulerTimerId);
+                schedulerTimerId = null;
+            }
+
+            // Reset beat display
+            resetBeatDisplay();
+
+            startStopBtn.textContent = 'Start';
+            startStopBtn.setAttribute('aria-label', 'Start metronome');
+            startStopBtn.classList.remove('playing');
+        }
+
+        // Toggle start/stop
+        function toggle() {
+            if (isPlaying) {
+                stop();
+            } else {
+                start();
+            }
+        }
+
+        // Update visual beat display
+        function updateBeatDisplay(beatIndex) {
+            beats.forEach((beat, i) => {
+                beat.classList.toggle('active', i === beatIndex);
+            });
+        }
+
+        // Reset beat display
+        function resetBeatDisplay() {
+            beats.forEach(beat => beat.classList.remove('active'));
+        }
+
+        // ==========================================
+        // Input Handling
+        // ==========================================
+
+        // Number pad handling
+        document.querySelectorAll('.numpad button').forEach(btn => {
+            btn.addEventListener('click', () => {
+                initAudio(); // Init on any interaction
+                const num = btn.dataset.num;
+
+                if (num === 'clear') {
+                    bpmInput.value = '';
+                } else if (num === 'backspace') {
+                    bpmInput.value = bpmInput.value.slice(0, -1);
+                } else {
+                    // Append digit (limit to 3 digits for BPM)
+                    if (bpmInput.value.length < 3) {
+                        bpmInput.value += num;
+                    }
+                }
+
+                bpmInput.focus();
+            });
+        });
+
+        // Keyboard handling
+        document.addEventListener('keydown', (e) => {
+            // Spacebar - toggle metronome
+            if (e.code === 'Space') {
+                e.preventDefault(); // Prevent page scroll
+                toggle();
+                return;
+            }
+
+            // Only handle number keys when not focused on input
+            // (input handles its own keystrokes)
+            if (document.activeElement === bpmInput) return;
+
+            // Number keys (main keyboard and numpad)
+            if (e.key >= '0' && e.key <= '9') {
+                if (bpmInput.value.length < 3) {
+                    bpmInput.value += e.key;
+                }
+            }
+
+            // Backspace
+            if (e.key === 'Backspace') {
+                bpmInput.value = bpmInput.value.slice(0, -1);
+            }
+        });
+
+        // BPM input - filter non-numeric input
+        bpmInput.addEventListener('input', () => {
+            bpmInput.value = bpmInput.value.replace(/[^0-9]/g, '').slice(0, 3);
+        });
+
+        // Start/Stop button
+        startStopBtn.addEventListener('click', toggle);
+
+        // ==========================================
+        // Theme Toggle
+        // ==========================================
+
+        function setTheme(theme) {
+            document.documentElement.setAttribute('data-theme', theme);
+            localStorage.setItem('metronome-theme', theme);
+        }
+
+        function toggleTheme() {
+            const current = document.documentElement.getAttribute('data-theme');
+            const next = current === 'dark' ? 'light' : 'dark';
+            setTheme(next);
+        }
+
+        themeToggle.addEventListener('click', toggleTheme);
+    </script>
+</body>
+</html>

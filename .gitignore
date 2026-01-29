@@ -1,0 +1,29 @@
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+*.sublime-*
+
+# Node (if ever needed)
+node_modules/
+npm-debug.log*
+
+# Build artifacts
+*.log
+
+# Local environment
+.env
+.env.local
+
+# Temporary files
+*.tmp
+*.temp
+
+# Local settings
+settings.local.json
